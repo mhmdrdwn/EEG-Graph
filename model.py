@@ -37,6 +37,7 @@ class ChebNetConv(nn.Module):
     def forward(self, x: torch.Tensor, laplacian: torch.sparse_coo_tensor):
         x = self.__transform_to_chebyshev(x, laplacian)
         x = self.linear(x)
+        
         return x
 
     def __transform_to_chebyshev(self, x, laplacian):
@@ -49,13 +50,14 @@ class ChebNetConv(nn.Module):
                 x2 = 2 * torch.matmul(laplacian, x1) - x0
                 cheb_x = torch.cat((cheb_x, x2.unsqueeze(2)), 2)
                 x0, x1 = x1, x2
-
+        cheb_x = cheb_x.reshape(cheb_x.shape[0], cheb_x.shape[1], cheb_x.shape[2]*cheb_x.shape[3])
         return cheb_x
+import torch.nn.functional as F
 
 
 class ChebNetGCN(nn.Module):
     def __init__(self, input_size, hidden_size, num_electrodes, out_channels, 
-                 num_classes, num_hidden_layers=2, dropout=0.1, residual=False, k=1):
+                 num_classes, num_hidden_layers=2, dropout=0, residual=False, k=2):
         super(ChebNetGCN, self).__init__()
 
         self.dropout = dropout
@@ -67,20 +69,28 @@ class ChebNetGCN(nn.Module):
         self.BN1 = nn.BatchNorm1d(out_channels)
         self.fc = nn.Linear(out_channels, num_classes)
         
-    def forward(self, x: torch.Tensor, laplacian: torch.sparse_coo_tensor):
+    def forward(self, x: torch.Tensor, laplacian: torch.sparse_coo_tensor, edge_weight=None):
         laplacian = normalize_all_A(laplacian)
+        if edge_weight is not None:
+            laplacian = edge_weight * laplacian
         x = F.dropout(x, p=self.dropout, training=self.training)
+        #print(x.shape)
         x = F.relu(self.input_conv(x, laplacian))
+        #print(x.shape)
         for conv in self.hidden_convs:
             if self.residual:
                 x = F.relu(conv(x, laplacian)) + x
             else:
                 x = F.relu(conv(x, laplacian))
+        #print(x.shape)        
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = self.output_conv(x, laplacian)
+        #print(x.shape)
         x = x.squeeze()
         batch =None
         x = global_mean_pool(x, batch)
+        #print(x.shape)
         x = self.BN1(x)
         x = self.fc(x)
+        #print(x.shape)
         return x
